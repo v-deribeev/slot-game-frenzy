@@ -1,0 +1,537 @@
+// Amaze Frenzy -- dark-mode casino UI.
+// BEM blocks: .slot, .machine, .reel, .win-frame, .hud, .fx, .coin
+// Motion uses translate3d only (GPU-composited); the JS writes transforms, CSS adds polish.
+
+@use 'sass:color';
+
+$gold: #f7c948;
+$gold-deep: #c8901c;
+$magenta: #ff3df2;
+$bg-0: #07060d;
+$bg-1: #120f22;
+$bg-2: #1c1733;
+
+:root {
+  --c-bg-0: #{$bg-0};
+  --c-bg-1: #{$bg-1};
+  --c-bg-2: #{$bg-2};
+  --c-gold: #{$gold};
+  --c-gold-deep: #{$gold-deep};
+  --c-accent: #{$magenta};
+  --c-text: #f4efff;
+  --c-muted: #9a90c2;
+  --c-danger: #ff5a6e;
+
+  --cell-size: clamp(76px, 20vmin, 148px);
+  --reel-gap: clamp(6px, 1.2vmin, 12px);
+  --radius-lg: 22px;
+  --radius-md: 14px;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--c-text);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba($magenta, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 50% 110%, rgba($gold, 0.12), transparent 60%),
+    linear-gradient(180deg, var(--c-bg-1), var(--c-bg-0));
+  overflow-x: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+// ---------------------------------------------------------------------------------------
+// .slot -- page shell
+// ---------------------------------------------------------------------------------------
+.slot {
+  --grid-reels: 3;
+  --grid-rows: 3;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(14px, 2.5vmin, 24px);
+  padding: clamp(16px, 4vmin, 40px);
+  user-select: none;
+
+  &__header {
+    text-align: center;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: clamp(1.8rem, 5vmin, 3rem);
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: linear-gradient(180deg, #fff6c9, $gold 45%, $gold-deep);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 2px 12px rgba($gold, 0.35));
+  }
+
+  &__status {
+    margin: 6px 0 0;
+    min-height: 1.4em;
+    font-size: 0.95rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--c-muted);
+    transition: color 0.2s ease;
+  }
+
+  &[data-state='SHOWING_WIN'] &__status {
+    color: var(--c-gold);
+  }
+
+  &[data-state='ERROR'] &__status {
+    color: var(--c-danger);
+  }
+
+  &__hint {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--c-muted);
+  }
+
+  &__kbd {
+    display: inline-block;
+    padding: 2px 10px;
+    margin-right: 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-bottom-width: 3px;
+    background: var(--c-bg-2);
+    color: var(--c-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+  }
+
+  &__seed {
+    margin: 0;
+    font-size: 0.7rem;
+    color: rgba(154, 144, 194, 0.55);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// .machine -- cabinet + reel window
+// ---------------------------------------------------------------------------------------
+.machine {
+  position: relative;
+
+  &__frame {
+    padding: clamp(12px, 2.4vmin, 22px);
+    border-radius: var(--radius-lg);
+    background:
+      linear-gradient(145deg, color.adjust($gold, $lightness: 10%), $gold-deep 40%, color.adjust($gold-deep, $lightness: -18%));
+    box-shadow:
+      0 0 0 2px rgba(0, 0, 0, 0.6),
+      0 30px 80px rgba(0, 0, 0, 0.65),
+      0 0 60px rgba($gold, 0.18);
+  }
+
+  // The 3x3 viewport: everything outside is clipped.
+  &__window {
+    position: relative;
+    width: calc(var(--cell-size) * var(--grid-reels) + var(--reel-gap) * (var(--grid-reels) - 1));
+    height: calc(var(--cell-size) * var(--grid-rows));
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: #05040a;
+    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.8);
+    isolation: isolate;
+
+    // Top/bottom depth shading over the reels.
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2;
+      background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.55) 0%,
+        transparent 18%,
+        transparent 82%,
+        rgba(0, 0, 0, 0.55) 100%
+      );
+    }
+
+    // Win presentation: dim the grid, frames punch through.
+    &::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background: rgba(4, 3, 10, 0.35);
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+
+    &--win::before {
+      opacity: 1;
+    }
+  }
+
+  &__reels {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-reels), var(--cell-size));
+    gap: var(--reel-gap);
+    height: 100%;
+  }
+
+  &__frames {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: grid;
+    grid-template-columns: repeat(var(--grid-reels), var(--cell-size));
+    grid-template-rows: repeat(var(--grid-rows), var(--cell-size));
+    column-gap: var(--reel-gap);
+    pointer-events: none;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// .reel -- one column; the strip holds rows + 1 cells and is shifted with translate3d
+// ---------------------------------------------------------------------------------------
+.reel {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #17122b, #221b3d 50%, #17122b);
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.7);
+
+  &__strip {
+    --reel-cells: 4;
+
+    display: flex;
+    flex-direction: column;
+    height: calc(var(--cell-size) * var(--reel-cells));
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+    backface-visibility: hidden;
+  }
+
+  &__cell {
+    --symbol-color: var(--c-text);
+
+    flex: 0 0 var(--cell-size);
+    display: grid;
+    place-items: center;
+    height: var(--cell-size);
+    font-size: calc(var(--cell-size) * 0.52);
+    font-weight: 900;
+    line-height: 1;
+    color: var(--symbol-color);
+    text-shadow:
+      0 0 14px color-mix(in srgb, var(--symbol-color) 55%, transparent),
+      0 3px 0 rgba(0, 0, 0, 0.55);
+
+    &--text {
+      font-size: calc(var(--cell-size) * 0.26);
+      letter-spacing: 0.06em;
+    }
+  }
+
+  &__glyph {
+    display: block;
+    transform: translate3d(0, 0, 0);
+  }
+
+  // Motion blur only while at full speed (cheap vertical smear via text-shadow + slight blur).
+  &--spinning &__strip {
+    filter: blur(1.4px);
+  }
+
+  &--spinning &__cell {
+    text-shadow:
+      0 calc(var(--cell-size) * -0.08) 0 color-mix(in srgb, var(--symbol-color) 35%, transparent),
+      0 calc(var(--cell-size) * 0.08) 0 color-mix(in srgb, var(--symbol-color) 35%, transparent);
+  }
+}
+
+// Wild gets a pulsing glow; colours for every symbol come from the DSL (injected CSS vars).
+.symbol--wild .reel__glyph {
+  padding: 0.25em 0.4em;
+  border-radius: 8px;
+  border: 2px solid currentColor;
+  background: color-mix(in srgb, var(--symbol-color) 18%, transparent);
+}
+
+// ---------------------------------------------------------------------------------------
+// .win-frame -- highlight overlay cells
+// ---------------------------------------------------------------------------------------
+.win-frame {
+  margin: 4px;
+  border-radius: 12px;
+  border: 3px solid transparent;
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(0.92);
+  transition:
+    opacity 0.2s ease,
+    transform 0.25s var(--ease-out);
+
+  &--active {
+    opacity: 1;
+    border-color: $gold;
+    background: radial-gradient(circle, rgba($gold, 0.22), transparent 70%);
+    box-shadow:
+      0 0 18px rgba($gold, 0.65),
+      inset 0 0 18px rgba($gold, 0.35);
+    transform: translate3d(0, 0, 0) scale(1);
+    animation: win-frame-pulse 0.7s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes win-frame-pulse {
+  from {
+    box-shadow:
+      0 0 10px rgba($gold, 0.45),
+      inset 0 0 10px rgba($gold, 0.25);
+  }
+  to {
+    box-shadow:
+      0 0 26px rgba($gold, 0.9),
+      inset 0 0 22px rgba($gold, 0.45);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// .fx / .coin -- pooled particle layer (nodes pre-created; JS toggles --active)
+// ---------------------------------------------------------------------------------------
+.fx {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.coin {
+  --coin-size: clamp(16px, 3.4vmin, 28px);
+
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--coin-size);
+  height: var(--coin-size);
+  margin: calc(var(--coin-size) / -2) 0 0 calc(var(--coin-size) / -2);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, #fffbe0 0 14%, transparent 15%),
+    radial-gradient(circle at 50% 50%, $gold 0 52%, $gold-deep 53% 64%, color.adjust($gold, $lightness: 8%) 65%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 0 10px rgba($gold, 0.6);
+  visibility: hidden;
+  opacity: 0;
+  transform: translate3d(0, 0, 0);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+
+  &--active {
+    visibility: visible;
+    opacity: 1;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// .hud -- controls
+// ---------------------------------------------------------------------------------------
+.hud {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  max-width: calc(var(--cell-size) * 3 + 220px);
+
+  &__panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, var(--c-bg-2), var(--c-bg-1));
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+    &--bet {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+
+    &--win {
+      border-color: rgba($gold, 0.25);
+    }
+  }
+
+  &__bet {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  &__label {
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--c-muted);
+  }
+
+  &__value {
+    font-size: clamp(1rem, 2.6vmin, 1.35rem);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    &--hot {
+      color: var(--c-gold);
+      text-shadow: 0 0 12px rgba($gold, 0.55);
+    }
+  }
+
+  &__bet-btn {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--c-bg-0);
+    font-size: 1.1rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      transform 0.1s ease;
+
+    &:hover:not(:disabled) {
+      background: color.adjust($bg-2, $lightness: 8%);
+    }
+
+    &:active:not(:disabled) {
+      transform: translate3d(0, 1px, 0);
+    }
+
+    &:disabled,
+    &[data-locked] {
+      opacity: 0.35;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+  }
+
+  &__spin {
+    position: relative;
+    min-width: 128px;
+    padding: 0 28px;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 1.15rem;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #2a1600;
+    background: linear-gradient(180deg, #ffe58a, $gold 45%, $gold-deep);
+    box-shadow:
+      0 6px 0 color.adjust($gold-deep, $lightness: -20%),
+      0 12px 30px rgba($gold, 0.35);
+    transform: translate3d(0, 0, 0);
+    transition:
+      transform 0.08s ease,
+      box-shadow 0.08s ease,
+      filter 0.2s ease;
+
+    &:hover {
+      filter: brightness(1.08);
+    }
+
+    &:active {
+      transform: translate3d(0, 4px, 0);
+      box-shadow:
+        0 2px 0 color.adjust($gold-deep, $lightness: -20%),
+        0 6px 18px rgba($gold, 0.3);
+    }
+
+    &:focus-visible {
+      outline: 3px solid var(--c-accent);
+      outline-offset: 3px;
+    }
+  }
+
+  &__spin-label {
+    display: block;
+  }
+
+  .slot[data-state='SPINNING'] &__spin,
+  .slot[data-state='SHOWING_WIN'] &__spin {
+    color: #fff;
+    background: linear-gradient(180deg, #ff8ae2, $magenta 45%, color.adjust($magenta, $lightness: -22%));
+    box-shadow:
+      0 6px 0 color.adjust($magenta, $lightness: -35%),
+      0 12px 30px rgba($magenta, 0.35);
+  }
+
+  .slot[data-state='ERROR'] &__spin {
+    color: #fff;
+    background: linear-gradient(180deg, #ff95a1, #ff5a6e 45%, #b8273a);
+    box-shadow: 0 6px 0 #6e1220;
+  }
+}
+
+@media (max-width: 640px) {
+  .hud {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+
+    &__spin {
+      grid-column: 1 / -1;
+      min-height: 56px;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reel--spinning .reel__strip {
+    filter: none;
+  }
+
+  .win-frame--active {
+    animation: none;
+  }
+}

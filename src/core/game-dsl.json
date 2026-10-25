@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "name": "Amaze Frenzy",
+  "currency": "CR",
+  "startingBalance": 1000,
+  "grid": { "reels": 3, "rows": 3 },
+  "bet": { "levels": [5, 10, 25, 50, 100], "defaultIndex": 1 },
+  "symbols": [
+    {
+      "id": "WILD",
+      "name": "Wild",
+      "glyph": "WILD",
+      "color": "#ff3df2",
+      "pay": 100,
+      "behaviors": [
+        { "type": "wild", "excludes": [] },
+        { "type": "multiplier", "value": 2, "onlyWhenSubstituting": true }
+      ]
+    },
+    { "id": "SEVEN", "name": "Lucky Seven", "glyph": "7", "color": "#ff4d5e", "pay": 50, "behaviors": [] },
+    { "id": "BAR", "name": "Bar", "glyph": "BAR", "color": "#ffd166", "pay": 25, "behaviors": [] },
+    { "id": "STAR", "name": "Star", "glyph": "★", "color": "#f9f871", "pay": 15, "behaviors": [] },
+    { "id": "DIAMOND", "name": "Diamond", "glyph": "◆", "color": "#4cc9f0", "pay": 10, "behaviors": [] },
+    { "id": "HEART", "name": "Heart", "glyph": "♥", "color": "#ff70a6", "pay": 5, "behaviors": [] },
+    { "id": "CLUB", "name": "Club", "glyph": "♣", "color": "#7bf1a8", "pay": 3, "behaviors": [] }
+  ],
+  "paylines": [
+    [0, 0, 0],
+    [1, 1, 1],
+    [2, 2, 2],
+    [0, 1, 2],
+    [2, 1, 0]
+  ],
+  "reelStrips": [
+    ["SEVEN", "CLUB", "HEART", "DIAMOND", "STAR", "CLUB", "WILD", "HEART", "BAR", "DIAMOND",
+     "CLUB", "STAR", "HEART", "SEVEN", "DIAMOND", "CLUB", "BAR", "HEART", "STAR", "WILD"],
+    ["CLUB", "STAR", "HEART", "BAR", "DIAMOND", "WILD", "CLUB", "HEART", "SEVEN", "STAR",
+     "DIAMOND", "CLUB", "HEART", "BAR", "STAR", "WILD", "DIAMOND", "CLUB", "SEVEN", "HEART"],
+    ["HEART", "DIAMOND", "CLUB", "SEVEN", "STAR", "HEART", "BAR", "CLUB", "WILD", "DIAMOND",
+     "STAR", "CLUB", "HEART", "BAR", "DIAMOND", "WILD", "CLUB", "STAR", "SEVEN", "HEART"]
+  ],
+  "reels": {
+    "spinSpeed": 18,
+    "minSpinMs": 650,
+    "stopStaggerMs": 240,
+    "stopDurationMs": 420,
+    "stopOvershoot": 1.25
+  },
+  "winSequence": {
+    "highlightMs": 700,
+    "countUpMs": 1400,
+    "fountainMs": 1500,
+    "settleMs": 1100,
+    "coinsPerSecond": 70
+  },
+  "particles": {
+    "poolSize": 160,
+    "gravity": 1700,
+    "lifetimeMs": 1500,
+    "speedMin": 520,
+    "speedMax": 940,
+    "spreadDeg": 70
+  },
+  "server": {
+    "latencyMs": 280,
+    "failureRate": 0
+  }
+}

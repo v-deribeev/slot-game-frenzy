@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Amaze Frenzy - Slot Machine Demo</title>
+  </head>
+  <body>
+    <main class="slot" id="app" data-state="IDLE">
+      <header class="slot__header">
+        <h1 class="slot__title" data-ref="title">Amaze Frenzy</h1>
+        <p class="slot__status" data-ref="status" role="status" aria-live="polite">Loading...</p>
+      </header>
+
+      <section class="machine" aria-label="Slot machine">
+        <div class="machine__frame">
+          <div class="machine__window" data-ref="window">
+            <div class="machine__reels" data-ref="reels"></div>
+            <div class="machine__frames" data-ref="frames" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="fx" data-ref="fx" aria-hidden="true"></div>
+      </section>
+
+      <footer class="hud">
+        <div class="hud__panel">
+          <span class="hud__label">Balance</span>
+          <span class="hud__value" data-ref="balance">0.00</span>
+        </div>
+
+        <div class="hud__panel hud__panel--bet">
+          <button class="hud__bet-btn" type="button" data-ref="betDown" aria-label="Decrease bet">-</button>
+          <div class="hud__bet">
+            <span class="hud__label">Bet</span>
+            <span class="hud__value" data-ref="bet">0.00</span>
+          </div>
+          <button class="hud__bet-btn" type="button" data-ref="betUp" aria-label="Increase bet">+</button>
+        </div>
+
+        <div class="hud__panel hud__panel--win">
+          <span class="hud__label">Win</span>
+          <span class="hud__value" data-ref="win">0.00</span>
+        </div>
+
+        <button class="hud__spin" type="button" data-ref="spin">
+          <span class="hud__spin-label" data-ref="spinLabel">Spin</span>
+        </button>
+      </footer>
+
+      <p class="slot__hint">
+        <kbd class="slot__kbd">Space</kbd> to spin &middot; press again to slam-stop or skip the win
+      </p>
+      <p class="slot__seed" data-ref="seed"></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
