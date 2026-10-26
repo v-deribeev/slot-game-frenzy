@@ -352,7 +352,8 @@ button {
     0 0 10px rgba($gold, 0.6);
   visibility: hidden;
   opacity: 0;
-  transform: translate3d(0, 0, 0);
+  // Fed per frame by DomCoinView via custom properties (interned strings, no formatting).
+  transform: translate3d(var(--coin-x, 0), var(--coin-y, 0), 0) rotate(var(--coin-r, 0deg)) scale(var(--coin-s, 1));
   will-change: transform, opacity;
   backface-visibility: hidden;
 

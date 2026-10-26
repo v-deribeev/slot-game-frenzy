@@ -225,6 +225,7 @@ export class SlotGame {
       return { status: 'error', errorCode: code };
     }
 
+    let settled = false;
     try {
       this.last = response;
       this.hooks.onSpinResult?.(response);
@@ -232,6 +233,7 @@ export class SlotGame {
 
       const win = response.win.totalWin;
       if (win > 0) this.setBalance(this.balanceValue + win);
+      settled = true;
 
       if (win <= 0 || signal.aborted) {
         this.hooks.onWinAmount?.(win);
@@ -252,6 +254,9 @@ export class SlotGame {
     } catch (err) {
       console.error('[SlotGame] spin pipeline failed', err);
       this.reels.halt();
+      // Void an unsettled round like a server error (refund); once the win is credited the
+      // round is complete and only its presentation failed, so the balance stands.
+      if (!settled) this.setBalance(this.balanceValue + bet);
       this.fail(GAME_ERROR_CODES.INTERNAL_ERROR);
       return { status: 'error', errorCode: GAME_ERROR_CODES.INTERNAL_ERROR };
     }

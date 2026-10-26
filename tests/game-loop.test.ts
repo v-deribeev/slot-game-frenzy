@@ -197,14 +197,17 @@ describe('Reel', () => {
     expect(a.spinTime).toBeCloseTo(1, 9);
   });
 
-  it('lands exactly on the requested stop after the delay + stopDuration and fires onStopped once', () => {
+  it('lands exactly on the requested stop after the reported landing delay + stopDuration and fires onStopped once', () => {
     for (const target of [0, 7, 19, 23, -1]) {
       const reel = new Reel(0, STRIP, TIMINGS, 0);
       const stopped = vi.fn();
       reel.onStopped = stopped;
       reel.startSpin();
       reel.update(0.2);
-      reel.requestStop(target, 0.3);
+      const landingIn = reel.requestStop(target, 0.3);
+      // Honours the delay, and never waits more than one extra strip revolution.
+      expect(landingIn).toBeGreaterThanOrEqual(0.3);
+      expect(landingIn).toBeLessThan(0.3 + STRIP.length / TIMINGS.spinSpeed);
       let t = 0;
       while (reel.isSpinning && t < 5) {
         reel.update(FRAME_60);
@@ -214,8 +217,8 @@ describe('Reel', () => {
       expect(reel.stopIndex).toBe(mod(target, 20));
       expect(reel.position).toBe(mod(target, 20));
       expect(stopped).toHaveBeenCalledTimes(1);
-      expect(t).toBeGreaterThanOrEqual(0.3 + 0.42 - 1e-9);
-      expect(t).toBeLessThan(0.3 + 0.42 + 2 * FRAME_60);
+      expect(t).toBeGreaterThanOrEqual(landingIn + 0.42 - 1e-9);
+      expect(t).toBeLessThan(landingIn + 0.42 + FRAME_60 + 1e-9);
     }
   });
 
@@ -253,21 +256,60 @@ describe('Reel', () => {
     }
   });
 
-  // OPEN finding F-02 (SPEC section 4): "its start distance is chosen so the landing begins at
-  // spin speed (no velocity jump)". The landing distance is the spin-speed distance plus up to
-  // one strip length, so the tween starts at up to ~11x spin speed. `it.fails` documents the
-  // defect; it will start failing (i.e. flag for removal) once the reel is fixed.
-  it.fails('landing begins at spin speed (no velocity jump) [F-02, open]', () => {
-    for (let target = 0; target < 20; target++) {
+  // F-02 (SPEC section 4): the landing must begin at spin speed and never exceed it.
+  function maxLandingSpeed(target: number, startOffset: number, dt: number) {
+    const reel = new Reel(0, STRIP, TIMINGS, 0);
+    reel.startSpin();
+    reel.update(startOffset);
+    reel.requestStop(target, 0);
+    let maxSpeed = 0;
+    let firstLandingSpeed = Number.NaN;
+    let prev = reel.position;
+    let prevPhase = reel.phase;
+    for (let i = 0; i < 1000 && reel.isSpinning; i++) {
+      reel.update(dt);
+      // Unwrap the strip modulo so a wrap-around isn't mistaken for a jump.
+      const step = mod(prev - reel.position + STRIP.length / 2, STRIP.length) - STRIP.length / 2;
+      const speed = Math.abs(step) / dt;
+      if (reel.phase === 'STOPPING' && prevPhase === 'SPINNING') firstLandingSpeed = speed;
+      maxSpeed = Math.max(maxSpeed, speed);
+      prev = reel.position;
+      prevPhase = reel.phase;
+    }
+    expect(reel.stopIndex).toBe(mod(target, STRIP.length));
+    return { maxSpeed, firstLandingSpeed };
+  }
+
+  it('landing begins at spin speed and never exceeds it, for every target and phase [F-02]', () => {
+    for (const dt of [FRAME_30, FRAME_60, 1 / 144]) {
+      for (let target = 0; target < STRIP.length; target++) {
+        for (const offset of [0.01, 0.05, 0.137, 0.5]) {
+          const { maxSpeed, firstLandingSpeed } = maxLandingSpeed(target, offset, dt);
+          expect(maxSpeed).toBeLessThanOrEqual(TIMINGS.spinSpeed * (1 + 1e-6));
+          // The frame that crosses into the landing is continuous with the spin speed.
+          expect(firstLandingSpeed).toBeGreaterThan(TIMINGS.spinSpeed * 0.8);
+        }
+      }
+    }
+  });
+
+  it('carries residual frame time from spinning into the landing tween (30 vs 60 FPS land identically)', () => {
+    function landedAt(dt: number): number {
       const reel = new Reel(0, STRIP, TIMINGS, 0);
       reel.startSpin();
-      reel.update(0.05);
-      reel.requestStop(target, 0);
-      reel.update(1 / 600);
-      const p0 = reel.position;
-      reel.update(1 / 600);
-      const speed = (p0 - reel.position) * 600;
-      expect(speed).toBeLessThan(TIMINGS.spinSpeed * 1.5);
+      const landingIn = reel.requestStop(11, 0.25);
+      let t = 0;
+      while (reel.isSpinning) {
+        reel.update(dt);
+        t += dt;
+      }
+      return t - (landingIn + TIMINGS.stopDurationMs / 1000);
+    }
+    // Overshoot past the exact end is bounded by a single frame, not one frame per phase.
+    for (const dt of [FRAME_30, FRAME_60]) {
+      const over = landedAt(dt);
+      expect(over).toBeGreaterThanOrEqual(-1e-9);
+      expect(over).toBeLessThan(dt + 1e-9);
     }
   });
 });
@@ -295,8 +337,10 @@ describe('ReelSet', () => {
     expect(reels.stops).toEqual([3, 11, 17]);
     expect(reels.isSpinning).toBe(false);
     const nominal = (cfg.reels.minSpinMs + 2 * cfg.reels.stopStaggerMs + cfg.reels.stopDurationMs) / 1000;
+    // Each reel may spin up to one extra strip revolution so it can land at spin speed.
+    const revolution = cfg.reelStrips[0].length / cfg.reels.spinSpeed;
     expect(time).toBeGreaterThanOrEqual(nominal - 1e-9);
-    expect(time).toBeLessThan(nominal + 3 * FRAME_60);
+    expect(time).toBeLessThan(nominal + cfg.reelStrips.length * revolution + 2 * FRAME_60);
   });
 
   it('takes the same wall-clock time at 30 and 60 FPS (within frame quantisation)', async () => {
@@ -317,10 +361,16 @@ describe('ReelSet', () => {
       };
     });
     reels.startSpin();
-    const p = reels.stopAt([1, 2, 3]);
-    for (let i = 0; i < 200; i++) reels.update(FRAME_60);
-    await p;
-    expect(order).toEqual([0, 1, 2]);
+    // Exhaustive over target combinations whose extra-revolution waits differ wildly.
+    for (const stops of [[1, 2, 3], [19, 0, 1], [0, 19, 10], [5, 5, 5], [12, 3, 18]]) {
+      order.length = 0;
+      reels.startSpin();
+      const p = reels.stopAt(stops);
+      for (let i = 0; i < 600 && reels.isSpinning; i++) reels.update(FRAME_60);
+      await p;
+      expect(order).toEqual([0, 1, 2]);
+      expect(reels.stops).toEqual(stops);
+    }
   });
 
   it('snaps every reel immediately on abort and removes its abort listener', async () => {
@@ -387,7 +437,7 @@ describe('ReelSet', () => {
 describe('Frame-rate independence', () => {
   const cfg = config();
 
-  it('WinSequence takes the same wall-clock time at 30 and 60 FPS (within one frame per step)', async () => {
+  it('WinSequence takes the same wall-clock time at 30 and 60 FPS (within one frame overall)', async () => {
     async function duration(dt: number): Promise<number> {
       const fountain = new CoinFountain({ ...cfg.particles, random: () => 0.5 });
       const ws = new WinSequence(cfg.winSequence, NULL_WIN_VIEW, fountain);
@@ -410,9 +460,11 @@ describe('Frame-rate independence', () => {
     const at60 = await duration(FRAME_60);
     expect(at60).toBeGreaterThanOrEqual(nominal - 1e-9);
     expect(at30).toBeGreaterThanOrEqual(nominal - 1e-9);
-    // Each of the 4 steps can overshoot by < 1 frame (residual dt is not carried over).
-    expect(Math.abs(at30 - at60)).toBeLessThanOrEqual(4 * FRAME_30 + 1e-9);
-    expect(at30 - nominal).toBeLessThanOrEqual(4 * FRAME_30 + 1e-9);
+    // Residual dt is carried into the next step, so the overshoot is < 1 frame in total
+    // rather than < 1 frame per step (F-06).
+    expect(Math.abs(at30 - at60)).toBeLessThan(FRAME_30 + 1e-9);
+    expect(at30 - nominal).toBeLessThan(FRAME_30 + 1e-9);
+    expect(at60 - nominal).toBeLessThan(FRAME_60 + 1e-9);
   });
 
   it('CoinFountain emits the same number of coins per second at 30 and 60 FPS', () => {

@@ -64,6 +64,8 @@ export class WinSequence {
   private stepDuration = 0;
   private stepElapsed = 0;
   private stepTicksCounter = false;
+  /** Frame time past the end of the last step, credited to the next one (frame-rate independence). */
+  private carry = 0;
 
   constructor(timings: WinSequenceConfig, view: WinSequenceView, emitter: ParticleEmitter) {
     this.timings = timings;
@@ -91,6 +93,7 @@ export class WinSequence {
     this.amount = amount;
     this.playing = true;
     this.step = null;
+    this.carry = 0;
     this.setDisplayed(0);
 
     let aborted = false;
@@ -151,7 +154,10 @@ export class WinSequence {
     this.stepElapsed += dt;
     const progress = this.stepDuration > 0 ? Math.min(1, this.stepElapsed / this.stepDuration) : 1;
     if (this.stepTicksCounter) this.setDisplayed(Math.round(this.amount * easeOutQuad(progress) * 100) / 100);
-    if (progress >= 1) this.finishStep(true);
+    if (progress >= 1) {
+      this.carry = this.stepElapsed - this.stepDuration;
+      this.finishStep(true);
+    }
   }
 
   private enter(step: WinStep): WinStep {
@@ -164,10 +170,12 @@ export class WinSequence {
   private runStep(durationMs: number, ticksCounter: boolean): Promise<boolean> {
     this.finishStep(false); // defensive: never orphan a previous step promise
     if (durationMs <= 0) return Promise.resolve(true);
+    const carry = this.carry;
+    this.carry = 0;
     return new Promise<boolean>((resolve) => {
       this.stepResolve = resolve;
       this.stepDuration = durationMs / 1000;
-      this.stepElapsed = 0;
+      this.stepElapsed = carry;
       this.stepTicksCounter = ticksCounter;
     });
   }

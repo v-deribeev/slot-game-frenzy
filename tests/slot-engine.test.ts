@@ -9,7 +9,7 @@ import {
   type GameStateType,
 } from '../src/core/StateMachine';
 import { ObjectPool } from '../src/core/ObjectPool';
-import { WinSequence, type WinSequenceView } from '../src/core/WinSequence';
+import { NULL_WIN_VIEW, WinSequence, type WinSequenceView } from '../src/core/WinSequence';
 import { CoinFountain } from '../src/entities/CoinFountain';
 import { SpinServerError } from '../src/core/legacy-rng.js';
 import type { SpinOutcome } from '../src/core/SlotGame';
@@ -557,11 +557,36 @@ describe('SlotGame: spin pipeline', () => {
     const ref = headless();
     const good = responseFor(ref, [0, 0, 0], 10);
     const engine = headless(config(), { server: scriptedServer(() => ({ ...good, stops: [0, 0] })) });
+    const start = engine.game.balance;
     const { value } = await runUntil(engine, engine.game.spin());
     expect(value).toEqual({ status: 'error', errorCode: 'INTERNAL_ERROR' });
     expect(engine.reels.isSpinning).toBe(false);
+    // F-04: the round never settled, so the bet is refunded exactly once (like a server error).
+    expect(engine.game.balance).toBe(start);
     expect(engine.game.acknowledgeError()).toBe(true);
     expect(errSpy).toHaveBeenCalled();
+  });
+
+  it('keeps a credited win and does not refund when only the win presentation fails [F-04]', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const ref = headless();
+    const good = responseFor(ref, [0, 0, 0], 10);
+    const won = { ...good, win: { totalWin: 30, lines: [], winningSymbols: ['SEVEN'] } };
+    const throwingView = {
+      ...NULL_WIN_VIEW,
+      highlight: () => {
+        throw new Error('view exploded');
+      },
+    };
+    const engine = headless(config(), { server: scriptedServer(() => won), winView: throwingView });
+    const { game } = engine;
+    const start = game.balance;
+    const { value } = await runUntil(engine, game.spin());
+    expect(value).toEqual({ status: 'error', errorCode: 'INTERNAL_ERROR' });
+    expect(game.balance).toBe(start - game.bet + 30); // settled round: no refund, win kept
+    expect(game.acknowledgeError()).toBe(true);
+    expect(game.state.type).toBe('IDLE');
+    errSpy.mockRestore();
   });
 
   // Regression for finding F-01: a win the FSM refuses to show used to leave the game stuck in

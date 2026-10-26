@@ -8,7 +8,7 @@ import {
   createSymbolRegistry,
   type SymbolBehavior,
 } from '../src/entities/SlotSymbol';
-import { buildGrid } from '../src/core/legacy-rng.js';
+import { buildGrid, createSpinServer } from '../src/core/legacy-rng.js';
 import { config } from './helpers';
 
 const cfg = config();
@@ -105,8 +105,9 @@ describe('PayoutEvaluator.evaluate', () => {
   it('pays symbol.pay * (bet / lines) * multiplier for a middle-row line', () => {
     const g = grid(['CLUB', 'SEVEN', 'HEART'], ['BAR', 'SEVEN', 'CLUB'], ['HEART', 'SEVEN', 'DIAMOND']);
     const win = evaluator.evaluate(g, 10);
-    expect(win.lines).toEqual([{ lineIndex: 1, symbolId: 'SEVEN', rows: [1, 1, 1], multiplier: 1, payout: 100 }]);
-    expect(win.totalWin).toBe(100);
+    const payout = S('SEVEN').pay * (10 / 5);
+    expect(win.lines).toEqual([{ lineIndex: 1, symbolId: 'SEVEN', rows: [1, 1, 1], multiplier: 1, payout }]);
+    expect(win.totalWin).toBe(payout);
     expect(win.winningSymbols).toEqual(['SEVEN']);
   });
 
@@ -116,17 +117,20 @@ describe('PayoutEvaluator.evaluate', () => {
     const win = evaluator.evaluate(g, 5);
     const lineBet = 1;
     const byLine = Object.fromEntries(win.lines.map((l) => [l.lineIndex, l]));
-    expect(byLine[0]).toMatchObject({ symbolId: 'SEVEN', multiplier: 1, payout: 50 * lineBet });
-    expect(byLine[1]).toMatchObject({ symbolId: 'SEVEN', multiplier: 2, payout: 100 * lineBet });
-    expect(byLine[2]).toMatchObject({ symbolId: 'CLUB', payout: 3 * lineBet });
+    const seven = S('SEVEN').pay;
+    expect(byLine[0]).toMatchObject({ symbolId: 'SEVEN', multiplier: 1, payout: seven * lineBet });
+    expect(byLine[1]).toMatchObject({ symbolId: 'SEVEN', multiplier: 2, payout: 2 * seven * lineBet });
+    expect(byLine[2]).toMatchObject({ symbolId: 'CLUB', payout: S('CLUB').pay * lineBet });
     expect(win.totalWin).toBe(win.lines.reduce((s, l) => s + l.payout, 0));
     expect(win.winningSymbols).toEqual([...new Set(win.lines.map((l) => l.symbolId))]);
   });
 
   it('rounds fractional line bets to cents', () => {
     const g = grid(['CLUB', 'CLUB', 'CLUB'], ['CLUB', 'CLUB', 'CLUB'], ['CLUB', 'CLUB', 'CLUB']);
-    const win = evaluator.evaluate(g, 1); // line bet 0.2 -> 0.6 per line, 5 lines
-    expect(win.totalWin).toBe(3);
+    const win = evaluator.evaluate(g, 0.33); // line bet 0.066 -> 0.132 -> 0.13 per line, 5 lines
+    expect(S('CLUB').pay).toBe(2);
+    for (const line of win.lines) expect(line.payout).toBe(0.13);
+    expect(win.totalWin).toBe(0.65);
     expect(roundCredits(0.1 + 0.2)).toBe(0.3);
   });
 
@@ -169,7 +173,42 @@ describe('PayoutEvaluator.evaluate', () => {
     const rtp = totalWin / (combos * bet);
     console.log(`[rtp] combos=${combos} hitRate=${(hits / combos).toFixed(4)} RTP=${(rtp * 100).toFixed(2)}% maxWin=${maxWin}x${bet}`);
     expect(combos).toBe(8000);
-    // Finding F-03 (open, game math): the shipped DSL pays out more than it takes.
-    expect(rtp).toBeGreaterThan(1);
+    // F-03: the exact theoretical RTP of the shipped DSL is 96.00% (target 95.5-96.5%).
+    expect(rtp * 100).toBeCloseTo(96, 6);
+    expect(hits / combos).toBeGreaterThan(0.15); // not a dead game
+  });
+
+  it('Monte Carlo: 100,000 seeded server spins measure RTP within 94.5-97.5% at every bet level [F-03]', async () => {
+    const SPINS = 100_000;
+    for (const seed of [1, 2026]) {
+      const server = createSpinServer({
+        reelStrips: cfg.reelStrips,
+        rows: cfg.grid.rows,
+        seed,
+        evaluate: (g, bet) => evaluator.evaluate(g, bet),
+        latencyMs: 0,
+      });
+      let staked = 0;
+      let won = 0;
+      for (let i = 0; i < SPINS; i++) {
+        const bet = cfg.bet.levels[i % cfg.bet.levels.length];
+        const res = await server.spin(bet);
+        staked += bet;
+        won += res.win.totalWin;
+      }
+      const rtp = (won / staked) * 100;
+      console.log(`[rtp] monte-carlo seed=${seed} spins=${SPINS} RTP=${rtp.toFixed(2)}%`);
+      expect(rtp).toBeGreaterThanOrEqual(94.5);
+      expect(rtp).toBeLessThanOrEqual(97.5);
+    }
+  }, 30_000);
+
+  it('RTP emerges from the strips: high payers and wilds are the scarcest symbols on every reel', () => {
+    for (const strip of cfg.reelStrips) {
+      const count = (id: string) => strip.filter((s) => s === id).length;
+      const byPay = [...cfg.symbols].sort((x, y) => y.pay - x.pay).map((s) => count(s.id));
+      // Counts are non-decreasing as pay decreases.
+      for (let i = 1; i < byPay.length; i++) expect(byPay[i]).toBeGreaterThanOrEqual(byPay[i - 1]);
+    }
   });
 });

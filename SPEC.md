@@ -73,9 +73,12 @@ Per frame: `reels.update(dt) -> winSequence.update(dt) -> fountain.update(dt) ->
 
 - `grid[reel][row]` (column-major). Row `r` of reel `i` shows `strip[(stop_i + r) mod len]`.
 - `Reel.position` is in symbol units. Spinning: `position -= spinSpeed * dt` (symbols move down).
-  Landing: easeOutBack tween over `stopDurationMs`. It runs on elapsed `dt` time, and its start
-  distance is chosen so the landing begins at spin speed (no velocity jump).
-- `ReelSet.stopAt(stops, signal)` waits `minSpinMs`, staggers reels by `stopStaggerMs`, and resolves
+  Landing: easeOutBack tween over `stopDurationMs` covering exactly `landingDistance`
+  (`spinSpeed * duration / easeOutBack'(0)`), so it begins at spin speed and never exceeds it. The
+  reel keeps spinning (at most one extra strip length) until its target is that far away; residual
+  frame time carries into the tween.
+- `ReelSet.stopAt(stops, signal)` waits `minSpinMs`, staggers reels by at least `stopStaggerMs`
+  (each reel's earliest landing is chained off the previous one, preserving order), and resolves
   once every reel rests. If the signal aborts, all reels `snapTo()` the result at once. It never rejects.
 - DOM: each reel renders `rows + 1` pre-created cells inside a strip, moved by
   `translate3d(0, -frac * 100/(rows+1) %, 0)`. Cell glyph/class strings are precomputed per strip

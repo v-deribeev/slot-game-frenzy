@@ -8,6 +8,10 @@
  *
  * All motion is `speed * dt` (spinning) or elapsed-time-based easing (landing), so the
  * result is frame-rate independent. `update()` allocates nothing.
+ *
+ * Landing never exceeds `spinSpeed`: the eased tween always covers exactly the distance whose
+ * initial slope equals the spin speed, and the reel keeps spinning (up to one strip length)
+ * until its target is exactly that far away. Residual frame time is carried into the tween.
  */
 
 export type ReelPhase = 'IDLE' | 'SPINNING' | 'STOPPING';
@@ -89,16 +93,33 @@ export class Reel {
     this.stopDelay = 0;
   }
 
-  /** Schedules a decelerating stop at `stop` after `delaySeconds` of further spinning. */
-  requestStop(stop: number, delaySeconds = 0): void {
+  /** Symbols travelled by the landing tween; chosen so it starts at exactly `spinSpeed`. */
+  get landingDistance(): number {
+    const { spinSpeed, stopDurationMs, stopOvershoot } = this.timings;
+    return (spinSpeed * (stopDurationMs / 1000)) / easeOutBackInitialSlope(stopOvershoot);
+  }
+
+  /**
+   * Schedules a decelerating stop at `stop`, spinning for at least `delaySeconds` more and then
+   * until the target is exactly `landingDistance` away (at most one extra strip length).
+   * Returns the seconds from now until the landing tween begins (0 if not spinning).
+   */
+  requestStop(stop: number, delaySeconds = 0): number {
     const target = this.normalizeStop(stop);
     if (this.phase === 'IDLE') {
       this.snapTo(target);
-      return;
+      return 0;
     }
-    if (this.phase === 'STOPPING') return; // already landing
+    if (this.phase === 'STOPPING') return 0; // already landing
+    const { spinSpeed } = this.timings;
+    const len = this.strip.length;
+    const delay = Math.max(0, delaySeconds);
+    const positionAtDelay = this.position - spinSpeed * delay;
+    let gap = mod(positionAtDelay - target - this.landingDistance, len);
+    if (len - gap < 1e-9) gap = 0; // float noise: already aligned, don't add a revolution
     this.pendingStop = target;
-    this.stopDelay = Math.max(0, delaySeconds);
+    this.stopDelay = delay + gap / spinSpeed;
+    return this.stopDelay;
   }
 
   /** Instantly lands on `stop` (slam-stop). Fires `onStopped` if the reel was moving. */
@@ -118,13 +139,17 @@ export class Reel {
     if (this.phase === 'IDLE' || !(dt > 0)) return;
 
     if (this.phase === 'SPINNING') {
-      this.spinTime += dt;
-      this.position = mod(this.position - this.timings.spinSpeed * dt, this.strip.length);
-      if (this.pendingStop >= 0) {
-        this.stopDelay -= dt;
-        if (this.stopDelay <= 0) this.beginLanding();
+      const landing = this.pendingStop >= 0 && this.stopDelay <= dt;
+      const spun = landing ? Math.max(0, this.stopDelay) : dt;
+      this.spinTime += spun;
+      this.position = mod(this.position - this.timings.spinSpeed * spun, this.strip.length);
+      if (!landing) {
+        if (this.pendingStop >= 0) this.stopDelay -= dt;
+        return;
       }
-      return;
+      this.beginLanding();
+      dt -= spun; // residual frame time advances the tween (frame-rate independence)
+      if (!(dt > 0)) return;
     }
 
     // STOPPING: time-based easing toward the target.
@@ -146,14 +171,11 @@ export class Reel {
   }
 
   private beginLanding(): void {
-    const { spinSpeed, stopDurationMs, stopOvershoot } = this.timings;
-    const duration = stopDurationMs / 1000;
-    // Distance that makes the eased landing start at the current spin speed.
-    const minDistance = (spinSpeed * duration) / easeOutBackInitialSlope(stopOvershoot);
-    const candidate = this.position - minDistance;
-    const k = Math.floor((candidate - this.pendingStop) / this.strip.length);
+    // requestStop() timed this so the target is `landingDistance` ahead; snap out float noise.
+    const len = this.strip.length;
+    const k = Math.round((this.position - this.landingDistance - this.pendingStop) / len);
     this.tweenFrom = this.position;
-    this.tweenTo = this.pendingStop + k * this.strip.length; // <= candidate, congruent to target
+    this.tweenTo = this.pendingStop + k * len;
     this.tweenElapsed = 0;
     this.finalStop = this.pendingStop;
     this.pendingStop = -1;

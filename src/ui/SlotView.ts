@@ -11,6 +11,7 @@ import type { WinSequenceView, WinStep } from '../core/WinSequence';
 import type { CoinParticle, ParticleView } from '../entities/CoinFountain';
 import { mod, type Reel } from '../entities/Reel';
 import type { SymbolRegistry } from '../entities/SlotSymbol';
+import { QuantizedStrings, coinStrings } from './StringCache';
 
 function ref<T extends HTMLElement>(root: ParentNode, name: string): T {
   const el = root.querySelector<T>(`[data-ref="${name}"]`);
@@ -33,7 +34,9 @@ export class ReelView {
   private readonly glyphText: string[];
   private readonly cellClass: string[];
   private readonly percentPerCell: number;
-  private lastOffset = Number.NaN;
+  /** `translate3d(...)` strings per 0.01% of sub-symbol offset, built once. */
+  private readonly offsets: QuantizedStrings;
+  private lastOffset = -1;
   private lastSpinning = false;
 
   constructor(parent: HTMLElement, strip: readonly string[], rows: number, symbols: SymbolRegistry) {
@@ -46,6 +49,7 @@ export class ReelView {
     parent.appendChild(this.element);
 
     this.percentPerCell = 100 / (rows + 1);
+    this.offsets = new QuantizedStrings(0, this.percentPerCell, 0.01, (v) => `translate3d(0, ${-Number(v.toFixed(2))}%, 0)`);
     this.cellIndex = new Int32Array(rows + 1).fill(-1);
     this.glyphText = strip.map((id) => symbols.get(id)?.glyph ?? id);
     this.cellClass = strip.map((id) => {
@@ -76,10 +80,10 @@ export class ReelView {
         this.glyphs[i].textContent = this.glyphText[idx];
       }
     }
-    const offset = Math.round(frac * this.percentPerCell * 1000) / 1000;
+    const offset = this.offsets.slot(frac * this.percentPerCell);
     if (offset !== this.lastOffset) {
       this.lastOffset = offset;
-      this.strip.style.transform = `translate3d(0, ${-offset}%, 0)`;
+      this.strip.style.transform = this.offsets.at(offset);
     }
     const spinning = reel.phase === 'SPINNING';
     if (spinning !== this.lastSpinning) {
@@ -89,9 +93,18 @@ export class ReelView {
   }
 }
 
-/** A pre-allocated DOM coin; shown/hidden by the object pool. */
+/**
+ * A pre-allocated DOM coin; shown/hidden by the object pool. Renders through CSS custom
+ * properties fed from interned string tables, writing only the slots that changed.
+ */
 export class DomCoinView implements ParticleView {
   readonly element: HTMLElement;
+  private readonly strings = coinStrings();
+  private lastX = -1;
+  private lastY = -1;
+  private lastRotation = -1;
+  private lastScale = -1;
+  private lastOpacity = -1;
 
   constructor(parent: HTMLElement) {
     this.element = document.createElement('span');
@@ -106,13 +119,23 @@ export class DomCoinView implements ParticleView {
 
   hide(): void {
     this.element.classList.remove('coin--active');
-    this.element.style.transform = '';
+    // Force a full write on the next show(): the pool may hand this node to a new coin.
+    this.lastX = this.lastY = this.lastRotation = this.lastScale = this.lastOpacity = -1;
   }
 
   render(p: CoinParticle): void {
     const s = this.element.style;
-    s.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) rotate(${p.rotation.toFixed(0)}deg) scale(${p.scale.toFixed(2)})`;
-    s.opacity = p.lifeRemaining < 0.25 ? (p.lifeRemaining * 4).toFixed(2) : '1';
+    const { px, deg, scale, unit } = this.strings;
+    const x = px.slot(p.x);
+    if (x !== this.lastX) s.setProperty('--coin-x', px.at((this.lastX = x)));
+    const y = px.slot(p.y);
+    if (y !== this.lastY) s.setProperty('--coin-y', px.at((this.lastY = y)));
+    const r = deg.slot(mod(Math.round(p.rotation), 360));
+    if (r !== this.lastRotation) s.setProperty('--coin-r', deg.at((this.lastRotation = r)));
+    const k = scale.slot(p.scale);
+    if (k !== this.lastScale) s.setProperty('--coin-s', scale.at((this.lastScale = k)));
+    const o = unit.slot(p.lifeRemaining < 0.25 ? p.lifeRemaining * 4 : 1);
+    if (o !== this.lastOpacity) s.opacity = unit.at((this.lastOpacity = o));
   }
 }
 
@@ -152,6 +175,9 @@ export class SlotView implements WinSequenceView {
   private readonly formatter: Intl.NumberFormat;
   private readonly currency: string;
   private lastWinText = '';
+  private lastWinValue = Number.NaN;
+  private readonly coinViews: DomCoinView[] = [];
+  private symbolStyle: HTMLStyleElement | null = null;
 
   constructor(root: HTMLElement, config: GameConfig, symbols: SymbolRegistry) {
     this.root = root;
@@ -197,7 +223,23 @@ export class SlotView implements WinSequenceView {
   }
 
   createCoinView(): DomCoinView {
-    return new DomCoinView(this.fxLayer);
+    const coin = new DomCoinView(this.fxLayer);
+    this.coinViews.push(coin);
+    return coin;
+  }
+
+  /** Removes every node this view created, so a re-mount (Vite HMR) starts from clean markup. */
+  destroy(): void {
+    this.clearHighlight();
+    for (const view of this.reelViews) view.element.remove();
+    this.reelViews.length = 0;
+    for (const column of this.frames) for (const frame of column) frame.remove();
+    this.frames.length = 0;
+    for (const coin of this.coinViews) coin.element.remove();
+    this.coinViews.length = 0;
+    this.symbolStyle?.remove();
+    this.symbolStyle = null;
+    delete this.root.dataset.winStep;
   }
 
   /** Fountain origin in fx-layer coordinates: horizontally centred, at the reel window's base. */
@@ -257,6 +299,8 @@ export class SlotView implements WinSequenceView {
   }
 
   setWinAmount(amount: number): void {
+    if (amount === this.lastWinValue) return; // skip formatting on unchanged frames
+    this.lastWinValue = amount;
     const text = this.formatCredits(amount);
     if (text === this.lastWinText) return;
     this.lastWinText = text;
@@ -287,5 +331,6 @@ export class SlotView implements WinSequenceView {
     style.dataset.generated = 'symbols';
     style.textContent = rules.join('\n');
     document.head.appendChild(style);
+    this.symbolStyle = style;
   }
 }
