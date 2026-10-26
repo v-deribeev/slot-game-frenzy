@@ -58,6 +58,12 @@ jobs:
 
             const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
             const PREFERRED = ["gemini-2.5-flash", "gemini-2.0-flash"];
+            const MAX_GEMINI_ATTEMPTS = 6;
+            // Current endpoint first; the legacy Azure host is kept as a secondary option.
+            const GITHUB_MODELS = [
+              { url: "https://models.github.ai/inference/chat/completions", model: "openai/gpt-4o" },
+              { url: "https://models.inference.ai.azure.com/chat/completions", model: "gpt-4o" },
+            ];
 
             const prompt = `You are a Principal Slot Engine Reviewer reviewing a PR authored by Claude.
 
@@ -77,46 +83,81 @@ jobs:
             4. End your review with an explicit line: either "VERDICT: APPROVED" (if ready to merge) or "VERDICT: CHANGES_REQUESTED".`;
 
             async function errorText(res) {
-              return (await res.text().catch(() => "")).slice(0, 300);
+              return (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
             }
 
-            // Pick a model the key can actually call, instead of a hard-coded name that may 404.
-            async function pickGeminiModel(key) {
-              const res = await fetch(`${GEMINI}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
+            // Network errors surface as "fetch failed"; include the underlying cause (DNS, TLS, ...).
+            async function request(url, options) {
+              try {
+                return await fetch(url, options);
+              } catch (err) {
+                throw new Error(`${new URL(url).host}: ${err.message}${err.cause ? ` (${err.cause.code || err.cause.message})` : ""}`);
+              }
+            }
+
+            /** Numeric version of "gemini-3.8-flash" -> 3.8; unknown -> 0. */
+            function geminiVersion(name) {
+              const m = /^gemini-(\d+(?:\.\d+)?)/.exec(name);
+              return m ? Number(m[1]) : 0;
+            }
+
+            // ListModels can still list models that 404 for this key ("no longer available to new
+            // users"), so rank every listed flash model and try them until one answers 200.
+            async function geminiCandidates(key) {
+              const res = await request(`${GEMINI}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
               if (res.status !== 200) throw new Error(`Gemini ListModels HTTP ${res.status}: ${await errorText(res)}`);
               const usable = ((await res.json()).models || [])
                 .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
-                .map((m) => m.name.replace(/^models\//, ""));
-              const model = PREFERRED.find((m) => usable.includes(m)) || usable.find((m) => /^gemini-.*flash/.test(m));
-              if (!model) throw new Error(`no generateContent-capable Gemini model in: ${usable.join(", ")}`);
-              return model;
+                .map((m) => m.name.replace(/^models\//, ""))
+                .filter((m) => /^gemini-[\d.]+-flash/.test(m));
+              const rank = (m) => [/preview|exp|lite/.test(m) ? 1 : 0, -geminiVersion(m), PREFERRED.includes(m) ? 0 : 1, m.length];
+              const cmp = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+              const ordered = [...new Set(usable)].sort(cmp);
+              if (ordered.length === 0) throw new Error("no generateContent-capable Gemini flash model listed for this key");
+              return ordered.slice(0, MAX_GEMINI_ATTEMPTS);
             }
 
             async function reviewWithGemini() {
               const key = process.env.GEMINI_API_KEY;
               if (!key) throw new Error("GEMINI_API_KEY is not set");
-              const model = await pickGeminiModel(key);
-              const res = await fetch(`${GEMINI}/models/${model}:generateContent`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-              });
-              if (res.status !== 200) throw new Error(`Gemini ${model} HTTP ${res.status}: ${await errorText(res)}`);
-              const text = (await res.json()).candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("");
-              if (!text) throw new Error(`Gemini ${model} returned no text`);
-              return { text, model: `Gemini ${model}` };
+              const errors = [];
+              for (const model of await geminiCandidates(key)) {
+                const res = await request(`${GEMINI}/models/${model}:generateContent`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+                });
+                if (res.status !== 200) {
+                  errors.push(`Gemini ${model} HTTP ${res.status}: ${await errorText(res)}`);
+                  console.error(`::warning::${errors[errors.length - 1]}`);
+                  continue;
+                }
+                const text = (await res.json()).candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("");
+                if (text) return { text, model: `Gemini ${model}` };
+                errors.push(`Gemini ${model} returned no text`);
+              }
+              throw new Error(errors.join(" | "));
             }
 
             async function reviewWithGitHubModels() {
-              const res = await fetch("https://models.inference.ai.azure.com/chat/completions", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GH_TOKEN}` },
-                body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "user", content: prompt }] }),
-              });
-              if (res.status !== 200) throw new Error(`GitHub Models gpt-4o HTTP ${res.status}: ${await errorText(res)}`);
-              const text = (await res.json()).choices?.[0]?.message?.content;
-              if (!text) throw new Error("GitHub Models gpt-4o returned no text");
-              return { text, model: "GitHub Models gpt-4o (fallback)" };
+              const errors = [];
+              for (const { url, model } of GITHUB_MODELS) {
+                try {
+                  const res = await request(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GH_TOKEN}` },
+                    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }] }),
+                  });
+                  if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${await errorText(res)}`);
+                  const text = (await res.json()).choices?.[0]?.message?.content;
+                  if (!text) throw new Error("returned no text");
+                  return { text, model: `GitHub Models ${model} (fallback)` };
+                } catch (err) {
+                  errors.push(`GitHub Models ${model} @ ${new URL(url).host}: ${err.message}`);
+                  console.error(`::warning::${errors[errors.length - 1]}`);
+                }
+              }
+              throw new Error(errors.join(" | "));
             }
 
             function postComment(body) {
@@ -133,7 +174,7 @@ jobs:
                   postComment(`## 🤖 Gemini Cross-Model PR Review\n\n_Reviewer model: ${model}_\n\n${text}`);
                   return;
                 } catch (err) {
-                  console.error(`::warning::${err.message}`);
+                  console.error(`::warning::${reviewer.name} exhausted every model`);
                   failures.push(err.message);
                 }
               }
