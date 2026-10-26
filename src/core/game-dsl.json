@@ -11,18 +11,18 @@
       "name": "Wild",
       "glyph": "WILD",
       "color": "#ff3df2",
-      "pay": 100,
+      "pay": 200,
       "behaviors": [
         { "type": "wild", "excludes": [] },
         { "type": "multiplier", "value": 2, "onlyWhenSubstituting": true }
       ]
     },
-    { "id": "SEVEN", "name": "Lucky Seven", "glyph": "7", "color": "#ff4d5e", "pay": 50, "behaviors": [] },
+    { "id": "SEVEN", "name": "Lucky Seven", "glyph": "7", "color": "#ff4d5e", "pay": 100, "behaviors": [] },
     { "id": "BAR", "name": "Bar", "glyph": "BAR", "color": "#ffd166", "pay": 25, "behaviors": [] },
-    { "id": "STAR", "name": "Star", "glyph": "★", "color": "#f9f871", "pay": 15, "behaviors": [] },
-    { "id": "DIAMOND", "name": "Diamond", "glyph": "◆", "color": "#4cc9f0", "pay": 10, "behaviors": [] },
-    { "id": "HEART", "name": "Heart", "glyph": "♥", "color": "#ff70a6", "pay": 5, "behaviors": [] },
-    { "id": "CLUB", "name": "Club", "glyph": "♣", "color": "#7bf1a8", "pay": 3, "behaviors": [] }
+    { "id": "STAR", "name": "Star", "glyph": "★", "color": "#f9f871", "pay": 12, "behaviors": [] },
+    { "id": "DIAMOND", "name": "Diamond", "glyph": "◆", "color": "#4cc9f0", "pay": 8, "behaviors": [] },
+    { "id": "HEART", "name": "Heart", "glyph": "♥", "color": "#ff70a6", "pay": 4, "behaviors": [] },
+    { "id": "CLUB", "name": "Club", "glyph": "♣", "color": "#7bf1a8", "pay": 2, "behaviors": [] }
   ],
   "paylines": [
     [0, 0, 0],
@@ -32,12 +32,12 @@
     [2, 1, 0]
   ],
   "reelStrips": [
-    ["SEVEN", "CLUB", "HEART", "DIAMOND", "STAR", "CLUB", "WILD", "HEART", "BAR", "DIAMOND",
-     "CLUB", "STAR", "HEART", "SEVEN", "DIAMOND", "CLUB", "BAR", "HEART", "STAR", "WILD"],
-    ["CLUB", "STAR", "HEART", "BAR", "DIAMOND", "WILD", "CLUB", "HEART", "SEVEN", "STAR",
-     "DIAMOND", "CLUB", "HEART", "BAR", "STAR", "WILD", "DIAMOND", "CLUB", "SEVEN", "HEART"],
-    ["HEART", "DIAMOND", "CLUB", "SEVEN", "STAR", "HEART", "BAR", "CLUB", "WILD", "DIAMOND",
-     "STAR", "CLUB", "HEART", "BAR", "DIAMOND", "WILD", "CLUB", "STAR", "SEVEN", "HEART"]
+    ["CLUB", "HEART", "DIAMOND", "CLUB", "STAR", "HEART", "BAR", "CLUB", "SEVEN", "CLUB",
+     "HEART", "DIAMOND", "STAR", "CLUB", "WILD", "HEART", "CLUB", "BAR", "DIAMOND", "STAR"],
+    ["HEART", "CLUB", "STAR", "DIAMOND", "CLUB", "BAR", "HEART", "CLUB", "WILD", "STAR",
+     "CLUB", "DIAMOND", "HEART", "SEVEN", "CLUB", "STAR", "BAR", "CLUB", "HEART", "DIAMOND"],
+    ["DIAMOND", "CLUB", "HEART", "SEVEN", "CLUB", "STAR", "CLUB", "HEART", "BAR", "DIAMOND",
+     "CLUB", "STAR", "HEART", "CLUB", "WILD", "DIAMOND", "CLUB", "HEART", "BAR", "STAR"]
   ],
   "reels": {
     "spinSpeed": 18,

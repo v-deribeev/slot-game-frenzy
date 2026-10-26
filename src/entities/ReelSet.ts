@@ -76,10 +76,12 @@ export class ReelSet {
       }
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      const minRemaining = Math.max(0, this.timings.minSpinMs / 1000 - this.spinElapsed);
+      // Each reel may spin up to one extra strip length to land at spin speed, so the next
+      // reel's earliest landing is chained off the previous one to keep the stagger order.
       const stagger = this.timings.stopStaggerMs / 1000;
+      let earliest = Math.max(0, this.timings.minSpinMs / 1000 - this.spinElapsed);
       this.reels.forEach((reel, i) => {
-        if (reel.isSpinning) reel.requestStop(stops[i], minRemaining + i * stagger);
+        if (reel.isSpinning) earliest = reel.requestStop(stops[i], earliest) + stagger;
         else reel.snapTo(stops[i]);
       });
       this.checkComplete();
