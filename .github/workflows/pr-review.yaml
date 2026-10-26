@@ -10,6 +10,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  models: read # GitHub Models fallback reviewer (GITHUB_TOKEN)
 
 jobs:
   test-and-review:
@@ -55,36 +56,93 @@ jobs:
             const comments = fs.readFileSync("pr_comments.txt", "utf8");
             const rules = fs.existsSync("CLAUDE.md") ? fs.readFileSync("CLAUDE.md", "utf8") : "";
 
-            async function review() {
-              const prompt = `You are a Principal Slot Engine Reviewer (Gemini) reviewing a PR authored by Claude.
-              
-              Project Constitution (CLAUDE.md):
-              ${rules}
-              
-              Previous PR Discussion & Claude Proofs:
-              ${comments}
-              
-              Current PR Diff:
-              ${diff}
-              
-              Instructions:
-              1. Evaluate the code for FSM safety, 60 FPS GC allocations, reel deceleration physics, and ~96% RTP math.
-              2. If Claude replied to your previous review with a test proof or architectural justification, evaluate it fairly—if Claude proved its approach is sound with tests/benchmarks, accept the proof and do NOT stubbornly repeat the objection.
-              3. Only flag genuine bugs, race conditions, or violations of CLAUDE.md.
-              4. End your review with an explicit line: either "VERDICT: APPROVED" (if ready to merge) or "VERDICT: CHANGES_REQUESTED".`;
+            const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+            const PREFERRED = ["gemini-2.5-flash", "gemini-2.0-flash"];
 
-              const res = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                }
-              );
-              const data = await res.json();
-              const reviewBody = data.candidates?.[0]?.content?.parts?.[0]?.text || "VERDICT: APPROVED";
-              fs.writeFileSync("review_comment.md", "## 🤖 Gemini Cross-Model PR Review\n\n" + reviewBody);
+            const prompt = `You are a Principal Slot Engine Reviewer reviewing a PR authored by Claude.
+
+            Project Constitution (CLAUDE.md):
+            ${rules}
+
+            Previous PR Discussion & Claude Proofs:
+            ${comments}
+
+            Current PR Diff:
+            ${diff}
+
+            Instructions:
+            1. Evaluate the code for FSM safety, 60 FPS GC allocations, reel deceleration physics, and ~96% RTP math.
+            2. If Claude replied to your previous review with a test proof or architectural justification, evaluate it fairly—if Claude proved its approach is sound with tests/benchmarks, accept the proof and do NOT stubbornly repeat the objection.
+            3. Only flag genuine bugs, race conditions, or violations of CLAUDE.md.
+            4. End your review with an explicit line: either "VERDICT: APPROVED" (if ready to merge) or "VERDICT: CHANGES_REQUESTED".`;
+
+            async function errorText(res) {
+              return (await res.text().catch(() => "")).slice(0, 300);
+            }
+
+            // Pick a model the key can actually call, instead of a hard-coded name that may 404.
+            async function pickGeminiModel(key) {
+              const res = await fetch(`${GEMINI}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
+              if (res.status !== 200) throw new Error(`Gemini ListModels HTTP ${res.status}: ${await errorText(res)}`);
+              const usable = ((await res.json()).models || [])
+                .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+                .map((m) => m.name.replace(/^models\//, ""));
+              const model = PREFERRED.find((m) => usable.includes(m)) || usable.find((m) => /^gemini-.*flash/.test(m));
+              if (!model) throw new Error(`no generateContent-capable Gemini model in: ${usable.join(", ")}`);
+              return model;
+            }
+
+            async function reviewWithGemini() {
+              const key = process.env.GEMINI_API_KEY;
+              if (!key) throw new Error("GEMINI_API_KEY is not set");
+              const model = await pickGeminiModel(key);
+              const res = await fetch(`${GEMINI}/models/${model}:generateContent`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+              });
+              if (res.status !== 200) throw new Error(`Gemini ${model} HTTP ${res.status}: ${await errorText(res)}`);
+              const text = (await res.json()).candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("");
+              if (!text) throw new Error(`Gemini ${model} returned no text`);
+              return { text, model: `Gemini ${model}` };
+            }
+
+            async function reviewWithGitHubModels() {
+              const res = await fetch("https://models.inference.ai.azure.com/chat/completions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GH_TOKEN}` },
+                body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "user", content: prompt }] }),
+              });
+              if (res.status !== 200) throw new Error(`GitHub Models gpt-4o HTTP ${res.status}: ${await errorText(res)}`);
+              const text = (await res.json()).choices?.[0]?.message?.content;
+              if (!text) throw new Error("GitHub Models gpt-4o returned no text");
+              return { text, model: "GitHub Models gpt-4o (fallback)" };
+            }
+
+            function postComment(body) {
+              fs.writeFileSync("review_comment.md", body);
               execSync(`gh pr comment ${process.env.PR_NUMBER} --repo ${process.env.REPO} --body-file review_comment.md`);
             }
-            review();
+
+            async function review() {
+              const failures = [];
+              for (const reviewer of [reviewWithGemini, reviewWithGitHubModels]) {
+                try {
+                  const { text, model } = await reviewer();
+                  console.log(`Review produced by ${model}`);
+                  postComment(`## 🤖 Gemini Cross-Model PR Review\n\n_Reviewer model: ${model}_\n\n${text}`);
+                  return;
+                } catch (err) {
+                  console.error(`::warning::${err.message}`);
+                  failures.push(err.message);
+                }
+              }
+              // Never turn a reviewer outage into an approval: report it without a verdict and fail.
+              postComment(`## ⚠️ AI PR Review Unavailable\n\nNo reviewer model could be reached, so no verdict was issued.\n\n${failures.map((f) => `- ${f}`).join("\n")}`);
+              process.exit(1);
+            }
+            review().catch((err) => {
+              console.error(err);
+              process.exit(1);
+            });
           '
